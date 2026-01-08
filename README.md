@@ -20,5 +20,5 @@ A small collection of clean, known-good NES boilerplates for learning and reuse.
 ## Build
 
 ```sh
-./build.sh                # build background template
-./build.sh src/template_sprite.s
+./build.sh                       # build background template
+./build.sh src/template_sprite.s # build sprite only template
