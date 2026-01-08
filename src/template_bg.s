@@ -1,8 +1,8 @@
-; ============================
-; template.s — known-good NES boilerplate (ca65)
+; ============================================================
+; template_bg.s — NES boilerplate (ca65) — BG + Sprites
 ; NROM-128 (16KB PRG), 8KB CHR-ROM
-; Shows a solid block sprite using tile 0
-; ============================
+; Boots to solid BG (tile 0 filled) + movable test sprite
+; ============================================================
 
 ; ----------------------------
 ; iNES HEADER
@@ -22,7 +22,6 @@ PPUCTRL   = $2000
 PPUMASK   = $2001
 PPUSTATUS = $2002
 OAMADDR   = $2003
-OAMDATA   = $2004
 PPUSCROLL = $2005
 PPUADDR   = $2006
 PPUDATA   = $2007
@@ -38,7 +37,9 @@ BTN_DOWN   = %00000100
 BTN_LEFT   = %00000010
 BTN_RIGHT  = %00000001
 
-; OAM shadow is fixed at $0200
+; PPUMASK presets (includes “show left 8px” bits)
+PPUMASK_BG_SPR = %00011110
+
 OAM_BUF = $0200
 
 ; ----------------------------
@@ -51,11 +52,9 @@ frame_hi:   .res 1
 pad1:       .res 1
 pad1_prev:  .res 1
 pad1_new:   .res 1
-tmp:        .res 1
-tmp2:       .res 1
 
 ; ----------------------------
-; BSS (RAM)
+; BSS
 ; ----------------------------
 .segment "BSS"
 game_state: .res 1
@@ -69,17 +68,17 @@ game_state: .res 1
 ; Palette data (32 bytes)
 ; ----------------------------
 Palettes:
-  ; BG (4×4)
-  .byte $0F,$30,$30,$30   ; BG0: bright  
+  ; BG0 = bright so the filled tile 0 is obvious
+  .byte $0F,$30,$30,$30
   .byte $0F,$06,$16,$26
   .byte $0F,$09,$19,$29
   .byte $0F,$0C,$1C,$2C
-  ; SPR (4×4) — SPR0 has obvious colors
-  .byte $0F,$30,$30,$30   ; SPR0: indexes 1-3 all $30 (bright)
+
+  ; SPR0 = bright (our test sprite uses color index 3 => entry 4)
+  .byte $0F,$16,$16,$16   ; SPR0: bright red (high contrast on white)
   .byte $0F,$00,$10,$20
   .byte $0F,$06,$16,$26
   .byte $0F,$09,$19,$29
-
 
 RESET:
   sei
@@ -98,7 +97,7 @@ RESET:
   sta PPUCTRL
   sta PPUMASK
 
-  ; PPU warm-up
+  ; warm up
   jsr WaitVBlank
   jsr WaitVBlank
 
@@ -114,7 +113,7 @@ RESET:
   ; align enabling rendering to vblank boundary
   jsr WaitVBlank
 
-  ; scroll = 0,0 (and latch clean)
+  ; scroll = 0,0 (clean latch)
   lda PPUSTATUS
   lda #$00
   sta PPUSCROLL
@@ -129,9 +128,8 @@ RESET:
   ; enable NMI + rendering
   lda #%10000000      ; NMI on
   sta PPUCTRL
-  lda #%00011110      ; BG on, sprites on, show left 8px for both
+  lda #PPUMASK_BG_SPR ; BG + sprites + show left 8px
   sta PPUMASK
-
 
 MainLoop:
 @wait:
@@ -141,9 +139,30 @@ MainLoop:
   sta nmi_ready
 
   jsr ReadController1
+
+  ; demo: move sprite with D-pad (held)
+  lda pad1
+  and #BTN_LEFT
+  beq :+
+    dec OAM_BUF+3
+:
+  lda pad1
+  and #BTN_RIGHT
+  beq :+
+    inc OAM_BUF+3
+:
+  lda pad1
+  and #BTN_UP
+  beq :+
+    dec OAM_BUF+0
+:
+  lda pad1
+  and #BTN_DOWN
+  beq :+
+    inc OAM_BUF+0
+:
+
   jmp MainLoop
-
-
 
 ; ----------------------------
 ; NMI
@@ -181,20 +200,18 @@ IRQ:
 ; HELPERS
 ; ----------------------------
 WaitVBlank:
-  lda PPUSTATUS      ; clear vblank flag / latch
+  lda PPUSTATUS
 @loop:
   lda PPUSTATUS
-  bpl @loop          ; bit7 clear? keep waiting
+  bpl @loop
   rts
 
-
+; Safe RAM clear: skip stack page ($0100) and OAM shadow page ($0200)
 ClearRAM:
   lda #$00
   tax
 @clr:
   sta $0000,x
-  ; sta $0100,x   ; <-- DON'T clear stack page from a subroutine
-  ; sta $0200,x   ; <-- keep OAM shadow handled by ClearOAM
   sta $0300,x
   sta $0400,x
   sta $0500,x
@@ -203,7 +220,6 @@ ClearRAM:
   inx
   bne @clr
   rts
-
 
 ClearOAM:
   lda #$FF
@@ -225,7 +241,7 @@ ClearNametable0:
   sta PPUADDR
 
   lda #$00        ; tile index 0
-  ldx #$04        ; 4 pages of 256 = 1024 bytes (covers tiles+attrs)
+  ldx #$04        ; 1024 bytes (tiles+attrs)
   ldy #$00
 @page:
 @byte:
@@ -234,10 +250,9 @@ ClearNametable0:
   bne @byte
   dex
   bne @page
+
   lda PPUSTATUS   ; clear latch after big VRAM write
   rts
-
-
 
 InitPalettes:
   lda PPUSTATUS
@@ -257,9 +272,9 @@ InitPalettes:
 DrawTestSprite:
   lda #$70
   sta OAM_BUF+0
-  lda #$00
+  lda #$00          ; tile 0 (solid)
   sta OAM_BUF+1
-  lda #$00
+  lda #$00          ; palette 0
   sta OAM_BUF+2
   lda #$80
   sta OAM_BUF+3
@@ -303,7 +318,7 @@ ReadController1:
 ; CHR (8KB)
 ; ----------------------------
 .segment "CHARS"
-  ; Tile 0 solid block
+  ; Tile 0: solid block (16 bytes = 2 planes)
   .byte $FF,$FF,$FF,$FF,$FF,$FF,$FF,$FF
   .byte $FF,$FF,$FF,$FF,$FF,$FF,$FF,$FF
   .res 8192-16, $00
