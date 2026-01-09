@@ -158,20 +158,12 @@ RESET:
   jsr ClearNametable0
   jsr InitPalettes
 
-  jsr DrawScoreLabelNT0
-
   jsr DrawTestSprite
 
+  jsr HUD_Init
   jsr HUD_DrawStatic
+  
 
-  lda #$03
-  sta lives
-  lda #$01
-  sta lives_dirty
-
-  ; score init
-  lda #$01
-  sta score_dirty           ; so digits draw on first NMI
 
 
 
@@ -274,21 +266,21 @@ NMI:
   tya
   pha
 
-  ; ---- HUD / VRAM updates (vblank-safe) ----
-  jsr HUD_NMI              ; checks dirty flags, redraws score/lives if needed
+  ; ---- HUD / VRAM updates ----
+  jsr HUD_NMI
 
-  ; ---- Sprite DMA (copies $0200-$02FF to OAM) ----
+  ; ---- sprite DMA ----
   lda #$00
   sta OAMADDR
   lda #$02
   sta OAMDMA
 
-  ; ---- keep scroll stable (good habit) ----
+  ; ---- keep scroll stable ----
   lda #$00
   sta PPUSCROLL
   sta PPUSCROLL
 
-  ; ---- frame counter + frame-ready flag ----
+  ; ---- frame sync ----
   inc frame_lo
   bne :+
     inc frame_hi
@@ -302,7 +294,6 @@ NMI:
   tax
   pla
   rti
-
 
 ; ----------------------------
 ; IRQ
@@ -420,6 +411,9 @@ ReadController1:
   sta pad1_new
   rts
 
+; ============================
+; PPU / VRAM HELPERS
+; ============================
 ; Inputs: X = tile_x (0..31), Y = tile_y (0..29)
 ; Output: PPUADDR set for writing into NT0
 SetNT0Addr_XY:
@@ -470,6 +464,33 @@ SetNT0Addr_XY:
   lda vram_lo
   sta PPUADDR
   rts
+
+; ============================
+; START HUD MODULE
+; HUD CONTRACT:
+; - Uses SetNT0Addr_XY (PPU helper) and PPUDATA writes (call in vblank / NMI)
+; - Digits at DIGIT_TILE_BASE ($10..$19)
+; - Letters at $20..$27 (S C O R E L I V)
+; - Tile $00 is blank (space)
+; ============================
+HUD_Init:
+  ; set default values (change per project)
+  lda #$00
+  sta bcd_hi
+  sta bcd_lo
+
+  lda #$03
+  sta lives
+
+  lda #$01
+  sta score_dirty
+  sta lives_dirty
+  rts
+
+HUD_DrawScore:
+  ldx #SCORE_X
+  ldy #SCORE_Y
+  jmp HUD_DrawScore4
 
 HUD_DrawScore4:
   ; set VRAM write position once, then stream 4 tiles
@@ -581,30 +602,10 @@ HUD_IncScore:
 @done:
   rts
 
-DrawScoreLabelNT0:
-  ldx #SCORE_LABEL_X
-  ldy #SCORE_Y
-  jsr SetNT0Addr_XY        ; sets PPUADDR to $2000 + y*32 + x
-
-  lda #LETTER_S
-  sta PPUDATA
-  lda #LETTER_C
-  sta PPUDATA
-  lda #LETTER_O
-  sta PPUDATA
-  lda #LETTER_R
-  sta PPUDATA
-  lda #LETTER_E
-  sta PPUDATA
-
-  lda #$00                 ; space (tile 0 = blank/placeholder)
-  sta PPUDATA
-
-  rts
 
 HUD_DrawStatic:
   ; ---- "SCORE " at (18,2) ----
-  ldx #18
+  ldx #SCORE_LABEL_X
   ldy #SCORE_Y
   jsr SetNT0Addr_XY
 
@@ -662,7 +663,7 @@ HUD_NMI:
     sta score_dirty
     ldx #SCORE_X
     ldy #SCORE_Y
-    jsr HUD_DrawScore4
+    jsr HUD_DrawScore
 @no_score:
 
   lda lives_dirty
@@ -672,6 +673,9 @@ HUD_NMI:
     jsr HUD_DrawLives1
 @no_lives:
   rts
+; ============================
+; END HUD MODULE
+; ============================
 
 ; ----------------------------
 ; VECTORS
