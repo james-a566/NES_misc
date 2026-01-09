@@ -9,6 +9,8 @@ The guiding rule of this repo is:
     - Reusable systems get modularized
 
 ## Directory Structure
+
+```
 .
 ├── build/                Output ROMs and object files
 ├── src/
@@ -23,6 +25,7 @@ The guiding rule of this repo is:
 ├── build.sh              Build script (non-HUD)
 ├── build_hud.sh          Build script (HUD-enabled)
 └── README.md
+```
 
 ## Build Scripts
 
