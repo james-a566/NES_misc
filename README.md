@@ -12,20 +12,30 @@ The guiding rule of this repo is:
 
 ```
 .
-├── build/                Output ROMs and object files
+├── build/                
 ├── src/
-│   ├── main.s            HUD-enabled main entry
-│   ├── main_no_hud.s     Baseline main without HUD
-│   ├── hud.s             HUD module (score, lives, labels)
-│   ├── template_bg.s     Background + sprite boilerplate
+│   ├── main.s            
+│   ├── main_no_hud.s     
+│   ├── hud.s             
+│   ├── template_bg.s     
 │   ├── template_sprite.s
-│   ├── practice_02.s     Graphics / HUD practice
-│   └── ppu.s             Reserved for future PPU helpers
-├── nes.cfg               ld65 linker config (NROM-128)
-├── build.sh              Build script (non-HUD)
-├── build_hud.sh          Build script (HUD-enabled)
+│   ├── practice_02.s     
+│   └── ppu.s             
+├── nes.cfg               
+├── build.sh              
+├── build_hud.sh          
 └── README.md
 ```
+### Notes
+
+- `build/` — output ROMs and object files  
+- `src/main.s` — HUD-enabled main entry  
+- `src/main_no_hud.s` — baseline main without HUD  
+- `src/hud.s` — HUD module (score, lives, labels)  
+- `template_bg.s` — background + sprite boilerplate  
+- `build.sh` — non-HUD build script  
+- `build_hud.sh` — HUD-enabled build script  
+
 
 ## Build Scripts
 
