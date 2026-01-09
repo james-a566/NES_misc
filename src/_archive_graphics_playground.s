@@ -1,7 +1,8 @@
 ; ============================================================
-; template_bg.s — NES boilerplate (ca65) — BG + Sprites
+; graphics_playground.s — Based on NES boilerplate (ca65) — BG + Sprites
 ; NROM-128 (16KB PRG), 8KB CHR-ROM
-; Boots to solid BG (tile 0 filled) + movable test sprite
+; (initially) Boots to solid BG (tile 0 filled) + movable test sprite 
+; File for testing graphics
 ; ============================================================
 
 ; ----------------------------
@@ -53,6 +54,13 @@ pad1:       .res 1
 pad1_prev:  .res 1
 pad1_new:   .res 1
 
+tmp:        .res 1
+tmp2:       .res 1
+
+vram_lo: .res 1
+vram_hi: .res 1
+
+
 ; ----------------------------
 ; BSS
 ; ----------------------------
@@ -68,14 +76,14 @@ game_state: .res 1
 ; Palette data (32 bytes)
 ; ----------------------------
 Palettes:
-  ; BG0 = bright so the filled tile 0 is obvious
-  .byte $0F,$30,$30,$30
+  ; BG0 = red, white, cyan
+  .byte $0F,$16,$30,$3C
   .byte $0F,$06,$16,$26
   .byte $0F,$09,$19,$29
   .byte $0F,$0C,$1C,$2C
 
   ; SPR0 = bright (our test sprite uses color index 3 => entry 4)
-  .byte $0F,$16,$16,$16   ; SPR0: bright red (high contrast on white)
+  .byte $0F,$0F,$0F,$0F  ; SPR0: black
   .byte $0F,$00,$10,$20
   .byte $0F,$06,$16,$26
   .byte $0F,$09,$19,$29
@@ -107,8 +115,26 @@ RESET:
 
   ; VRAM init (rendering still OFF)
   jsr ClearNametable0
+  jsr DrawCheckerboard2x2NT0
   jsr InitPalettes
   jsr DrawTestSprite
+
+
+  ; put tile 1 at (10,12)
+  lda #$01
+  ldx #10
+  ldy #12
+  jsr SetTileNT0_AXY
+
+  ; force that whole 32x32 block to BG palette 2
+  lda #$02
+  ldx #10
+  ldy #12
+  jsr SetBGPaletteBlockNT0_AXY
+
+
+
+
 
   ; align enabling rendering to vblank boundary
   jsr WaitVBlank
@@ -240,8 +266,8 @@ ClearNametable0:
   lda #$00
   sta PPUADDR
 
-  lda #$00        ; tile index 0
-  ldx #$40        ; 1024 bytes (tiles+attrs)
+  lda #$00          ; tile 0
+  ldx #$04
   ldy #$00
 @page:
 @byte:
@@ -251,8 +277,206 @@ ClearNametable0:
   dex
   bne @page
 
-  lda PPUSTATUS   ; clear latch after big VRAM write
+  lda PPUSTATUS
   rts
+
+DrawCheckerboardNT0:
+  lda PPUSTATUS
+  lda #$20
+  sta PPUADDR
+  lda #$00
+  sta PPUADDR
+
+  ldy #$00          ; row 0..29
+@row:
+  tya
+  and #$01
+  sta tmp
+
+  ldx #$20          ; 32 cols
+@col:
+  lda tmp
+  sta PPUDATA
+  eor #$01
+  sta tmp
+  dex
+  bne @col
+
+  iny
+  cpy #$1E
+  bne @row
+
+  ; attributes (palette 0 everywhere)
+  lda #$00
+  ldx #$40
+@attr:
+  sta PPUDATA
+  dex
+  bne @attr
+
+  lda PPUSTATUS
+  rts
+
+DrawCheckerboard2x2NT0:
+  ; VRAM addr = $2000
+  lda PPUSTATUS
+  lda #$20
+  sta PPUADDR
+  lda #$00
+  sta PPUADDR
+
+  ldy #$00              ; row = 0..29
+@row:
+  ; row_group = (row >> 1) & 1  (toggles every 2 rows)
+  tya
+  lsr a
+  and #$01
+  sta tmp               ; tmp = row toggle (0/1)
+
+  ldx #$20              ; 32 columns
+@col:
+  ; col_group = (col >> 1) & 1  (toggles every 2 cols)
+  txa
+  lsr a
+  and #$01
+  eor tmp               ; combine row+col for checker pattern
+  sta tmp2              ; tmp2 = 0/1
+
+  lda tmp2              ; tile id = 0 or 1
+  sta PPUDATA
+
+  dex
+  bne @col
+
+  iny
+  cpy #$1E
+  bne @row
+
+  ; attributes = palette 0 everywhere
+  lda #$00
+  ldx #$40
+@attr:
+  sta PPUDATA
+  dex
+  bne @attr
+
+  lda PPUSTATUS
+  rts
+
+; ------------------------------------------------------------
+; SetTileNT0_AXY
+;  A = tile id
+;  X = tile_x (0..31)
+;  Y = tile_y (0..29)
+; Writes tile to $2000 + (Y*32) + X
+; Call with rendering OFF, or during vblank/NMI.
+; ------------------------------------------------------------
+SetTileNT0_AXY:
+  sta tmp              ; save tile id
+
+  ; vram = Y * 32  (16-bit)
+  tya
+  sta vram_lo
+  lda #$00
+  sta vram_hi
+
+  ; multiply by 32 = shift left 5 times
+  asl vram_lo
+  rol vram_hi
+  asl vram_lo
+  rol vram_hi
+  asl vram_lo
+  rol vram_hi
+  asl vram_lo
+  rol vram_hi
+  asl vram_lo
+  rol vram_hi
+
+  ; add X
+  txa
+  clc
+  adc vram_lo
+  sta vram_lo
+  lda vram_hi
+  adc #$00
+  sta vram_hi
+
+  ; add base $2000
+  lda vram_hi
+  clc
+  adc #$20
+  sta vram_hi
+
+  ; set PPUADDR and write tile
+  lda PPUSTATUS         ; reset latch
+  lda vram_hi
+  sta PPUADDR
+  lda vram_lo
+  sta PPUADDR
+
+  lda tmp
+  sta PPUDATA
+  rts
+
+; ------------------------------------------------------------
+; SetBGPaletteBlockNT0_AXY (SIMPLE)
+;  A = palette number (0..3)
+;  X = tile_x (0..31)
+;  Y = tile_y (0..29)
+; Sets BG palette for the entire 32x32 attribute cell containing (X,Y)
+; NT0 attribute table ($23C0)
+; Call during vblank or with rendering OFF.
+; ------------------------------------------------------------
+SetBGPaletteBlockNT0_AXY:
+  and #$03
+  sta tmp
+
+  ; vram_lo = (Y>>2)*8 + (X>>2)
+  txa
+  lsr a
+  lsr a
+  sta vram_lo         ; x>>2
+
+  tya
+  lsr a
+  lsr a               ; y>>2
+  asl a
+  asl a
+  asl a               ; (y>>2)*8
+  clc
+  adc vram_lo
+  sta vram_lo
+
+  lda #$23
+  sta vram_hi         ; $23C0 page
+
+  ; build attribute byte = p | (p<<2) | (p<<4) | (p<<6)
+  lda tmp
+  asl a
+  asl a               ; p<<2
+  ora tmp
+  sta tmp             ; tmp = p | (p<<2)
+
+  lda tmp
+  asl a
+  asl a
+  asl a
+  asl a               ; (p | p<<2) << 4 = p<<4 | p<<6
+  ora tmp             ; full byte
+
+  ; write to $23C0 + index
+  lda PPUSTATUS
+  lda vram_hi
+  sta PPUADDR
+  lda #$C0
+  clc
+  adc vram_lo
+  sta PPUADDR
+
+  sta PPUDATA
+  rts
+
+
 
 InitPalettes:
   lda PPUSTATUS
@@ -318,7 +542,13 @@ ReadController1:
 ; CHR (8KB)
 ; ----------------------------
 .segment "CHARS"
-  ; Tile 0: solid block (16 bytes = 2 planes)
+  ; Tile 0: solid block
   .byte $FF,$FF,$FF,$FF,$FF,$FF,$FF,$FF
   .byte $FF,$FF,$FF,$FF,$FF,$FF,$FF,$FF
-  .res 8192-16, $00
+
+  ; Tile 1: solid box (plane 0 only => color index 1)
+  .byte $FF,$FF,$FF,$FF, $FF,$FF,$FF,$FF
+  .byte $00,$00,$00,$00,$00,$00,$00,$00
+
+  .res 8192-32, $00
+
