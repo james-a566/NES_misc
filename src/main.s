@@ -1,13 +1,11 @@
 ; ============================================================
-; BUILD TARGET: practice_02.s
-; based on template_bg.s — NES boilerplate (ca65) — BG + Sprites
+; main.s — based on template_bg.s NES boilerplate (ca65) — BG + Sprites
 ; NROM-128 (16KB PRG), 8KB CHR-ROM
 ; Boots to solid BG (tile 0 filled) + movable test sprite
-
-; SCORE SYSTEM
-; - bcd_hi:bcd_lo = packed BCD score (0000–9999)
-; - score_dirty = 1 when score changes
-; - Drawn in NMI at (SCORE_X, SCORE_Y)
+; HUD module (hud.s)
+; Requires:
+;   jsr HUD_DrawStatic during init (rendering off or vblank)
+;   jsr HUD_NMI inside NMI
 ; ============================================================
 
 ; ----------------------------
@@ -48,57 +46,20 @@ PPUMASK_BG_SPR = %00011110
 
 OAM_BUF = $0200
 
-; ----------------------------
-; HUD layout (tile coords)
-; ----------------------------
-SCORE_X        = 24
-SCORE_Y        = 2
-SCORE_LABEL_X  = 18          ; "SCORE " starts here (5 letters + space)
 
-LIVES_LABEL_X  = 2
-LIVES_X        = 8           ; lives digit goes here (after "LIVES ")
-LIVES_Y        = 2
-
-; ----------------------------
-; CHR tile IDs (HUD)
-; ----------------------------
-DIGIT_TILE_BASE = $10        ; '0'..'9' at $10..$19
-
-LETTER_S = $20
-LETTER_C = $21
-LETTER_O = $22
-LETTER_R = $23
-LETTER_E = $24
-LETTER_L = $25
-LETTER_I = $26
-LETTER_V = $27
-
+; HUD module (implemented in hud.s, linked separately)
+.import HUD_Init, HUD_DrawStatic, HUD_NMI, HUD_IncScore, HUD_SetLives
 
 ; ----------------------------
 ; ZEROPAGE
 ; ----------------------------
 .segment "ZEROPAGE"
-nmi_ready:    .res 1
-frame_lo:     .res 1
-frame_hi:     .res 1
-
-pad1:         .res 1
-pad1_prev:    .res 1
-pad1_new:     .res 1
-
-; HUD state
-bcd_hi:       .res 1
-bcd_lo:       .res 1
-score_dirty:  .res 1
-
-lives:        .res 1
-lives_dirty:  .res 1
-
-; scratch / helpers
-tmp:          .res 1
-vram_lo:      .res 1
-vram_hi:      .res 1
-
+nmi_ready:  .res 1
+frame_lo:   .res 1
+frame_hi:   .res 1
+pad1:       .res 1
+pad1_prev:  .res 1
+pad1_new:   .res 1
 
 ; ----------------------------
 ; BSS
@@ -158,14 +119,9 @@ RESET:
   jsr ClearNametable0
   jsr InitPalettes
 
+  jsr HUD_DrawStatic        ; writes "SCORE" + "LIVES" into Nametable
+  jsr HUD_Init              ; sets score/lives + sets dirty flags
   jsr DrawTestSprite
-
-  jsr HUD_Init
-  jsr HUD_DrawStatic
-  
-
-
-
 
   ; align enabling rendering to vblank boundary
   jsr WaitVBlank
@@ -187,6 +143,9 @@ RESET:
   sta PPUCTRL
   lda #PPUMASK_BG_SPR ; BG + sprites + show left 8px
   sta PPUMASK
+
+    lda #$00
+    sta nmi_ready
 
 MainLoop:
 @wait:
@@ -219,39 +178,11 @@ MainLoop:
     inc OAM_BUF+0
 :
 
-  lda pad1_new
-  and #BTN_A
-  beq @no_a
-
+lda pad1_new
+and #BTN_A
+beq :+
   jsr HUD_IncScore
-  lda #$01
-  sta score_dirty
-
-@no_a:
-
-; B button = lives--
-lda pad1_new
-and #BTN_B
-beq :+
-  lda lives
-  beq :+          ; clamp at 0
-  dec lives
-  lda #$01
-  sta lives_dirty
 :
-
-; SELECT = lives++
-lda pad1_new
-and #BTN_SELECT
-beq :+
-  lda lives
-  cmp #$09
-  beq :+
-  inc lives
-  lda #$01
-  sta lives_dirty
-:
-
 
 
   jmp MainLoop
@@ -269,7 +200,7 @@ NMI:
   ; ---- HUD / VRAM updates ----
   jsr HUD_NMI
 
-  ; ---- sprite DMA ----
+  ; ---- OAM DMA every frame ----
   lda #$00
   sta OAMADDR
   lda #$02
@@ -280,11 +211,7 @@ NMI:
   sta PPUSCROLL
   sta PPUSCROLL
 
-  ; ---- frame sync ----
   inc frame_lo
-  bne :+
-    inc frame_hi
-:
   lda #$01
   sta nmi_ready
 
@@ -295,9 +222,7 @@ NMI:
   pla
   rti
 
-; ----------------------------
-; IRQ
-; ----------------------------
+
 IRQ:
   rti
 
@@ -411,272 +336,6 @@ ReadController1:
   sta pad1_new
   rts
 
-; ============================
-; PPU / VRAM HELPERS
-; ============================
-; Inputs: X = tile_x (0..31), Y = tile_y (0..29)
-; Output: PPUADDR set for writing into NT0
-SetNT0Addr_XY:
-  ; compute 16-bit offset = y*32 + x into vram_hi:vram_lo
-  stx vram_lo
-  lda #$00
-  sta vram_hi
-
-  tya
-  sta tmp
-
-  ; (tmp * 32) via 5 shifts into vram_hi:vram_lo
-  lda tmp
-  sta vram_lo
-  lda #$00
-  sta vram_hi
-
-  asl vram_lo
-  rol vram_hi
-  asl vram_lo
-  rol vram_hi
-  asl vram_lo
-  rol vram_hi
-  asl vram_lo
-  rol vram_hi
-  asl vram_lo
-  rol vram_hi
-
-  ; add X
-  txa
-  clc
-  adc vram_lo
-  sta vram_lo
-  lda vram_hi
-  adc #$00
-  sta vram_hi
-
-  ; add base $2000
-  lda vram_hi
-  clc
-  adc #$20
-  sta vram_hi
-
-  ; set PPUADDR
-  lda PPUSTATUS
-  lda vram_hi
-  sta PPUADDR
-  lda vram_lo
-  sta PPUADDR
-  rts
-
-; ============================
-; START HUD MODULE
-; HUD CONTRACT:
-; - Uses SetNT0Addr_XY (PPU helper) and PPUDATA writes (call in vblank / NMI)
-; - Digits at DIGIT_TILE_BASE ($10..$19)
-; - Letters at $20..$27 (S C O R E L I V)
-; - Tile $00 is blank (space)
-; ============================
-HUD_Init:
-  ; set default values (change per project)
-  lda #$00
-  sta bcd_hi
-  sta bcd_lo
-
-  lda #$03
-  sta lives
-
-  lda #$01
-  sta score_dirty
-  sta lives_dirty
-  rts
-
-HUD_DrawScore:
-  ldx #SCORE_X
-  ldy #SCORE_Y
-  jmp HUD_DrawScore4
-
-HUD_DrawScore4:
-  ; set VRAM write position once, then stream 4 tiles
-  jsr SetNT0Addr_XY
-
-  ; ---- thousands (high nibble of bcd_hi) ----
-  lda bcd_hi
-  lsr a
-  lsr a
-  lsr a
-  lsr a               ; A = 0..9
-  clc
-  adc #DIGIT_TILE_BASE
-  sta PPUDATA
-
-  ; ---- hundreds (low nibble of bcd_hi) ----
-  lda bcd_hi
-  and #$0F
-  clc
-  adc #DIGIT_TILE_BASE
-  sta PPUDATA
-
-  ; ---- tens (high nibble of bcd_lo) ----
-  lda bcd_lo
-  lsr a
-  lsr a
-  lsr a
-  lsr a
-  clc
-  adc #DIGIT_TILE_BASE
-  sta PPUDATA
-
-  ; ---- ones (low nibble of bcd_lo) ----
-  lda bcd_lo
-  and #$0F
-  clc
-  adc #DIGIT_TILE_BASE
-  sta PPUDATA
-
-  rts
-
-; ------------------------------------------------------------
-; HUD_IncScore
-; Increments packed BCD score bcd_hi:bcd_lo from 0000..9999
-; Wraps 9999 -> 0000
-; ------------------------------------------------------------
-HUD_IncScore:
-  ; --- increment ones nibble ---
-  lda bcd_lo
-  clc
-  adc #$01
-  sta bcd_lo
-
-  lda bcd_lo
-  and #$0F
-  cmp #$0A
-  bcc @done            ; no carry
-
-  ; ones overflow: clear ones, carry to tens
-  lda bcd_lo
-  and #$F0
-  sta bcd_lo
-
-  lda bcd_lo
-  clc
-  adc #$10
-  sta bcd_lo
-
-  lda bcd_lo
-  and #$F0
-  cmp #$A0
-  bcc @done            ; no carry
-
-  ; tens overflow: clear tens, carry to hundreds
-  lda bcd_lo
-  and #$0F
-  sta bcd_lo
-
-  lda bcd_hi
-  clc
-  adc #$01
-  sta bcd_hi
-
-  lda bcd_hi
-  and #$0F
-  cmp #$0A
-  bcc @done            ; no carry
-
-  ; hundreds overflow: clear hundreds, carry to thousands
-  lda bcd_hi
-  and #$F0
-  sta bcd_hi
-
-  lda bcd_hi
-  clc
-  adc #$10
-  sta bcd_hi
-
-  lda bcd_hi
-  and #$F0
-  cmp #$A0
-  bcc @done            ; no carry
-
-  ; thousands overflow: wrap to 0000
-  lda #$00
-  sta bcd_hi
-  sta bcd_lo
-
-@done:
-  rts
-
-
-HUD_DrawStatic:
-  ; ---- "SCORE " at (18,2) ----
-  ldx #SCORE_LABEL_X
-  ldy #SCORE_Y
-  jsr SetNT0Addr_XY
-
-  lda #LETTER_S
-  sta PPUDATA
-  lda #LETTER_C
-  sta PPUDATA
-  lda #LETTER_O
-  sta PPUDATA
-  lda #LETTER_R
-  sta PPUDATA
-  lda #LETTER_E
-  sta PPUDATA
-  lda #$00          ; space (tile 0)
-  sta PPUDATA
-
-  ; ---- "LIVES " at (2,2) ----
-  ldx #LIVES_LABEL_X
-  ldy #LIVES_Y
-  jsr SetNT0Addr_XY
-
-  lda #LETTER_L
-  sta PPUDATA
-  lda #LETTER_I
-  sta PPUDATA
-  lda #LETTER_V
-  sta PPUDATA
-  lda #LETTER_E
-  sta PPUDATA
-  lda #LETTER_S
-  sta PPUDATA
-  lda #$00          ; space
-  sta PPUDATA
-
-  rts
-
-
-HUD_DrawLives1:
-  ldx #LIVES_X
-  ldy #LIVES_Y
-  jsr SetNT0Addr_XY
-
-  lda lives
-  and #$0F
-  clc
-  adc #DIGIT_TILE_BASE   ; $10
-  sta PPUDATA
-  rts
-
-
-HUD_NMI:
-  lda score_dirty
-  beq @no_score
-    lda #$00
-    sta score_dirty
-    ldx #SCORE_X
-    ldy #SCORE_Y
-    jsr HUD_DrawScore
-@no_score:
-
-  lda lives_dirty
-  beq @no_lives
-    lda #$00
-    sta lives_dirty
-    jsr HUD_DrawLives1
-@no_lives:
-  rts
-; ============================
-; END HUD MODULE
-; ============================
-
 ; ----------------------------
 ; VECTORS
 ; ----------------------------
@@ -688,7 +347,6 @@ HUD_NMI:
 ; ----------------------------
 ; CHR (8KB)
 ; ----------------------------
-
 ; CHR MAP
 ; $00        blank (all $00)
 ; $01        test / debug tile
@@ -698,7 +356,7 @@ HUD_NMI:
 ; $20-27     "Score/lives" letters
 
 .segment "CHARS"
-  .org $0000
+CHR_START:
 
 ; Tiles $00-$0F
 
@@ -882,4 +540,5 @@ Digits:
 
   ; Tiles $F0 - $FF:
 
-  .org $2000
+CHR_END:
+.res 8192 - (CHR_END - CHR_START), $00
